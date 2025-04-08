@@ -10,10 +10,13 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 app = Flask(__name__)
-CORS(app, origins=os.getenv('ALLOWED_ORIGINS', '*').split(','))
+
+# Allow only your frontend domain (or all for testing)
+frontend_origin = os.getenv('ALLOWED_ORIGINS', 'https://context-aware-front-end.onrender.com')
+CORS(app, origins=[frontend_origin])
 
 # Constants
-MAX_CONTEXT_DEPTH = 3  # Number of previous exchanges to remember
+MAX_CONTEXT_DEPTH = 3
 MAX_TOKENS = 1000
 TEMPERATURE = 0.7
 MODEL_NAME = 'models/gemini-1.5-flash-latest'
@@ -27,7 +30,7 @@ try:
 except Exception as e:
     logging.error(f"Gemini initialization failed: {e}")
 
-# Study Resources (Example)
+# Study Resources
 study_resources = {
     "python": ["https://docs.python.org/3/", "https://www.learnpython.org/"],
     "flask": ["https://flask.palletsprojects.com/", "https://realpython.com/flask-by-example/"],
@@ -35,7 +38,6 @@ study_resources = {
 }
 
 def get_resources_from_query(query: str) -> list:
-    """Extract relevant study resources based on query"""
     resources = []
     for keyword in study_resources:
         if keyword.lower() in query.lower():
@@ -43,7 +45,6 @@ def get_resources_from_query(query: str) -> list:
     return resources
 
 def validate_context(context):
-    """Ensure context has valid structure"""
     if not isinstance(context, list):
         return False
     for item in context:
@@ -58,40 +59,32 @@ def validate_context(context):
 @app.route('/ask', methods=['POST'])
 def ask():
     if not model:
-        return jsonify({
-            "fulfillmentText": "AI service unavailable",
-            "context": []
-        }), 503
+        return jsonify({"fulfillmentText": "AI service unavailable", "context": []}), 503
 
     try:
-        req_data = request.get_json()
+        req_data = request.get_json(force=True, silent=True)
         if not req_data:
             return jsonify({"fulfillmentText": "Invalid request", "context": []}), 400
 
-        # Input Validation
         context = req_data.get('context', [])
         current_message = req_data.get('currentMessage', '').strip()
 
         if not validate_context(context):
-            context = []
             logging.warning("Invalid context structure received")
+            context = []
 
         if not current_message:
             return jsonify({"fulfillmentText": "Please enter a question", "context": context}), 400
 
-        # Context Management
         valid_context = context[-(MAX_CONTEXT_DEPTH * 2):]
 
-        # Build Gemini History
         gemini_history = []
         for exchange in valid_context:
             role = "user" if exchange['role'] == "user" else "model"
             gemini_history.append({"role": role, "parts": [{"text": exchange['content']}]})
 
-        # Add current message
         gemini_history.append({"role": "user", "parts": [{"text": current_message}]})
 
-        # Generate Response
         try:
             response = model.generate_content(
                 gemini_history,
@@ -105,7 +98,6 @@ def ask():
             logging.error(f"Gemini API error: {str(e)}")
             bot_response = "Error processing request"
 
-        # Append Study Resources
         try:
             resources = get_resources_from_query(current_message)
             if resources:
@@ -113,7 +105,6 @@ def ask():
         except Exception as resource_e:
             logging.error(f"Resource lookup error: {resource_e}")
 
-        # Update Context
         new_context = valid_context + [
             {"role": "user", "content": current_message},
             {"role": "bot", "content": bot_response}
